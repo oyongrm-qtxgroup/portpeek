@@ -11,6 +11,30 @@ use tauri_plugin_window_state::StateFlags;
 /// Passed by the autostart registration so a sign-in launch can start in the tray.
 const AUTOSTART_FLAG: &str = "--autostart";
 
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
+    app.autolaunch().is_enabled().map_err(|e| e.to_string())
+}
+
+/// Returns the state read back from the OS, never the state we asked for, so a
+/// write that silently fails cannot present itself as success.
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
+    let mgr = app.autolaunch();
+    if enabled {
+        mgr.enable().map_err(|e| format!("enable failed: {e}"))?;
+    } else {
+        mgr.disable().map_err(|e| format!("disable failed: {e}"))?;
+    }
+    let actual = mgr.is_enabled().map_err(|e| e.to_string())?;
+    if actual != enabled {
+        return Err(format!(
+            "autostart still reads {actual} after asking for {enabled}"
+        ));
+    }
+    Ok(actual)
+}
+
 /// Bring the widget back from the tray. `unminimize` matters as well as `show`:
 /// hiding and minimising are independent states, and a widget that was minimised
 /// before being hidden stays off-screen if you only call `show`.
@@ -26,7 +50,11 @@ fn show_widget(app: &tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .manage(ports::PortState::default())
-        .invoke_handler(tauri::generate_handler![ports::list_ports])
+        .invoke_handler(tauri::generate_handler![
+            ports::list_ports,
+            get_autostart,
+            set_autostart
+        ])
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 // Position + size only. Restoring VISIBLE would let a run that ended
@@ -74,13 +102,18 @@ pub fn run() {
                 .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => show_widget(app),
                     "autostart" => {
-                        let mgr = app.autolaunch();
-                        let _ = if mgr.is_enabled().unwrap_or(false) {
-                            mgr.disable()
-                        } else {
-                            mgr.enable()
+                        let want = !app.autolaunch().is_enabled().unwrap_or(false);
+                        // Drive the checkmark from what the OS reports back, not from
+                        // what we asked for -- CheckMenuItem ticks itself on click, so
+                        // a failed write would otherwise look like it succeeded.
+                        let actual = match set_autostart(app.clone(), want) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                let _ = app.emit("autostart-error", e);
+                                app.autolaunch().is_enabled().unwrap_or(false)
+                            }
                         };
-                        let _ = autostart_check.set_checked(mgr.is_enabled().unwrap_or(false));
+                        let _ = autostart_check.set_checked(actual);
                     }
                     "quit" => app.exit(0),
                     _ => {}

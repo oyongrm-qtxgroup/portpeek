@@ -50,10 +50,38 @@ function usePorts() {
     };
   }, [refresh]);
 
-  return { rows, error, loaded, refresh };
+  return { rows, error, loaded, refresh, setError };
 }
 
-function Header({ count, onRefresh }: { count: number; onRefresh: () => void }) {
+function useAutostart(onError: (msg: string) => void) {
+  const [on, setOn] = useState(false);
+
+  useEffect(() => {
+    invoke<boolean>("get_autostart").then(setOn).catch(() => {});
+  }, []);
+
+  const toggle = useCallback(async () => {
+    try {
+      // The command returns the state read back from the OS, so `on` can never
+      // drift from what actually got written.
+      setOn(await invoke<boolean>("set_autostart", { enabled: !on }));
+    } catch (e) {
+      onError(String(e));
+    }
+  }, [on, onError]);
+
+  return { on, toggle };
+}
+
+function Header({
+  count,
+  onRefresh,
+  autostart,
+}: {
+  count: number;
+  onRefresh: () => void;
+  autostart: ReturnType<typeof useAutostart>;
+}) {
   // data-tauri-drag-region applies only to the element it sits on, so the
   // non-interactive children carry it too — otherwise dragging by the title fails.
   return (
@@ -77,6 +105,19 @@ function Header({ count, onRefresh }: { count: number; onRefresh: () => void }) 
         className="rounded px-1.5 py-0.5 text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
       >
         ⟳
+      </button>
+      <button
+        title={
+          autostart.on
+            ? "Start with Windows: ON — click to disable"
+            : "Start with Windows: OFF — click to enable"
+        }
+        onClick={autostart.toggle}
+        className={`rounded px-1.5 py-0.5 hover:bg-white/10 ${
+          autostart.on ? "text-amber-400" : "text-zinc-600 hover:text-zinc-100"
+        }`}
+      >
+        ⏻
       </button>
       <button
         // hide(), not minimize(): minimising a frameless always-on-top widget leaves
@@ -186,11 +227,12 @@ function Row({ row }: { row: PortRow }) {
 }
 
 export default function App() {
-  const { rows, error, loaded, refresh } = usePorts();
+  const { rows, error, loaded, refresh, setError } = usePorts();
+  const autostart = useAutostart(setError);
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-zinc-900 text-zinc-200">
-      <Header count={rows.length} onRefresh={refresh} />
+      <Header count={rows.length} onRefresh={refresh} autostart={autostart} />
       <Favorites rows={rows} />
       {error && (
         <div className="border-b border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[10px] text-red-300">

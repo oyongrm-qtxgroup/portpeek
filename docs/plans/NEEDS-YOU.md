@@ -1,11 +1,12 @@
 # Needs You
 
-- [ ] 2026-08-12 Verify the tray "Start with Windows" toggle actually registers autostart.
-  Right-click the PortPeek tray icon (it sits under "Show Hidden Icons") → click
-  "Start with Windows". Then confirm a `portpeek` value appears under
-  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` pointing at the installed exe
-  with a `--autostart` argument. Click again to confirm it is removed.
-  Everything either side of this is verified: the plugin is wired, autostart defaults
-  to OFF (registry checked clean), and launching with `--autostart` correctly parks the
-  app in the tray with no visible window. Only the menu-click → registry-write step is
-  unproven — automating a Win32 tray popup menu proved unreliable and was abandoned.
+- [ ] 2026-08-12 Confirm the **tray** "Start with Windows" item writes the registry.
+  The header ⏻ button is verified working (writes and removes
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\portpeek` correctly), and tray
+  menu events are verified firing (tray → Quit exits the app). The tray item routes
+  through the same verified `set_autostart` function, so it should behave identically
+  — but that exact click was never proven end to end, because automating the Windows 11
+  hidden-icon flyout was too flaky to trust.
+  To confirm: right-click the tray icon → "Start with Windows", then run
+  `reg query "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v portpeek`.
+  Prefer the header ⏻ button — it is the verified path and far more discoverable.
