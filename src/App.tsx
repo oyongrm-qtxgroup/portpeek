@@ -225,40 +225,173 @@ function Header({
   );
 }
 
-// ponytail: favourites are hard-coded to 8080 until M5 adds add/remove +
-// persistence. The status is already live so the chip never shows a stale lie.
-function Favorites({ rows }: { rows: PortRow[] }) {
-  const holder = rows.find((r) => r.port === 8080);
+type Config = { favorites: number[]; collapsed: boolean; pollIntervalMs: number };
+
+function useConfig() {
+  const [config, setConfig] = useState<Config | null>(null);
+
+  useEffect(() => {
+    invoke<Config>("get_config").then(setConfig).catch(() => {});
+  }, []);
+
+  // Rust owns sanitising (sort/dedupe/strip), and we adopt what it returns rather
+  // than what we sent, so the UI can never drift from what is on disk.
+  const write = useCallback(async (next: Config) => {
+    setConfig(next);
+    try {
+      setConfig(await invoke<Config>("save_config", { config: next }));
+    } catch {
+      /* keep the optimistic value; a failed write must not blank the strip */
+    }
+  }, []);
+
+  const addFavorite = useCallback(
+    (port: number) => {
+      if (!config || port < 1 || port > 65535) return;
+      if (config.favorites.includes(port)) return;
+      write({ ...config, favorites: [...config.favorites, port] });
+    },
+    [config, write],
+  );
+
+  const removeFavorite = useCallback(
+    (port: number) => {
+      if (!config) return;
+      write({ ...config, favorites: config.favorites.filter((p) => p !== port) });
+    },
+    [config, write],
+  );
+
+  return { config, addFavorite, removeFavorite };
+}
+
+function Favorites({
+  favorites,
+  rows,
+  pending,
+  onKill,
+  onAdd,
+  onRemove,
+}: {
+  favorites: number[];
+  rows: PortRow[];
+  pending: Pending | null;
+  onKill: (r: PortRow) => void;
+  onAdd: (port: number) => void;
+  onRemove: (port: number) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const commit = () => {
+    const port = Number(draft.trim());
+    if (Number.isInteger(port)) onAdd(port);
+    setDraft("");
+    setAdding(false);
+  };
+
   return (
-    <div className="flex items-center gap-1.5 border-b border-white/10 px-3 py-2">
-      <span className="flex items-center gap-1.5 rounded-md bg-white/5 px-2 py-1 font-mono text-xs text-zinc-200">
-        <span
-          className={`size-1.5 rounded-full ${holder ? "bg-amber-400" : "bg-emerald-400"}`}
+    <div className="flex flex-wrap items-center gap-1.5 border-b border-white/10 px-3 py-2">
+      {favorites.map((port) => {
+        const holder = rows.find((r) => r.port === port);
+        const dying = pending?.port === port;
+        return (
+          <span
+            key={port}
+            title={
+              holder
+                ? `${holder.process} · pid ${holder.pid} — right-click to unpin`
+                : "free — right-click to unpin"
+            }
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onRemove(port);
+            }}
+            className={`flex items-center gap-1.5 rounded-md bg-white/5 px-2 py-1 font-mono text-xs text-zinc-200 ${
+              dying ? "opacity-50" : ""
+            }`}
+          >
+            <span
+              className={`size-1.5 rounded-full ${
+                dying ? "animate-pulse bg-zinc-400" : holder ? "bg-amber-400" : "bg-emerald-400"
+              }`}
+            />
+            {port}
+            <span className="max-w-24 truncate font-sans text-[10px] text-zinc-400">
+              {dying ? "terminating…" : holder ? holder.process : "free"}
+            </span>
+            {holder && !holder.shield && !dying && (
+              <button
+                onClick={() => onKill(holder)}
+                title={`Free port ${port}`}
+                className="ml-0.5 text-zinc-500 hover:text-red-400"
+              >
+                ✕
+              </button>
+            )}
+          </span>
+        );
+      })}
+
+      {adding ? (
+        <input
+          autoFocus
+          value={draft}
+          inputMode="numeric"
+          onChange={(e) => setDraft(e.target.value.replace(/\D/g, ""))}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            if (e.key === "Escape") {
+              setDraft("");
+              setAdding(false);
+            }
+          }}
+          placeholder="port"
+          className="w-16 rounded-md bg-white/10 px-2 py-1 font-mono text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none"
         />
-        8080
-        <span className="font-sans text-[10px] text-zinc-400">
-          {holder ? holder.process : "free"}
-        </span>
-      </span>
+      ) : (
+        <button
+          onClick={() => setAdding(true)}
+          title="Pin a port"
+          className="rounded-md px-1.5 py-1 text-xs text-zinc-500 hover:bg-white/10 hover:text-zinc-200"
+        >
+          +
+        </button>
+      )}
     </div>
   );
 }
 
-function Row({ row, onKill }: { row: PortRow; onKill: (r: PortRow) => void }) {
+function Row({
+  row,
+  onKill,
+  dying,
+}: {
+  row: PortRow;
+  onKill: (r: PortRow) => void;
+  dying: boolean;
+}) {
   const stack = row.ipv4 && row.ipv6 ? "v4+v6" : row.ipv6 ? "v6" : "v4";
   const runner = runnerLabel(row.cmd);
   const project = projectLabel(row.cmd);
   // Degrade, never blank: cmd -> exe -> a plain statement that we cannot see in.
   const detail = row.cmd ?? row.exe ?? "no command line — run as administrator for detail";
   return (
-    <li className="group flex items-start gap-2 px-3 py-1.5 hover:bg-white/5">
+    <li
+      className={`group flex items-start gap-2 px-3 py-1.5 hover:bg-white/5 ${
+        dying ? "opacity-45" : ""
+      }`}
+    >
       <span
         className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
-          row.shield === "hard"
-            ? "bg-zinc-600"
-            : row.shield === "critical"
-              ? "bg-red-500"
-              : "bg-emerald-400"
+          dying
+            ? "animate-pulse bg-zinc-400"
+            : row.shield === "hard"
+              ? "bg-zinc-600"
+              : row.shield === "critical"
+                ? "bg-red-500"
+                : "bg-emerald-400"
         }`}
       />
       <div className="min-w-0 flex-1">
@@ -289,7 +422,13 @@ function Row({ row, onKill }: { row: PortRow; onKill: (r: PortRow) => void }) {
           {detail}
         </div>
       </div>
-      {row.shield === "hard" ? (
+      {dying ? (
+        // The row cannot vanish until the next scan proves the port is free, so
+        // say what is happening HERE rather than leaving it looking untouched.
+        <span className="mt-0.5 shrink-0 animate-pulse text-[10px] text-zinc-400">
+          terminating…
+        </span>
+      ) : row.shield === "hard" ? (
         <span
           title={
             row.pid === 4
@@ -413,6 +552,7 @@ export default function App() {
   const { rows, error, loaded, refresh, setError } = usePorts();
   const autostart = useAutostart(setError);
   const kill = useKill(rows);
+  const { config, addFavorite, removeFavorite } = useConfig();
   const [filter, setFilter] = useState("");
 
   const q = filter.trim().toLowerCase();
@@ -432,7 +572,14 @@ export default function App() {
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-zinc-900 text-zinc-200">
       <Header count={rows.length} onRefresh={refresh} autostart={autostart} />
-      <Favorites rows={rows} />
+      <Favorites
+        favorites={config?.favorites ?? []}
+        rows={rows}
+        pending={kill.pending}
+        onKill={kill.open}
+        onAdd={addFavorite}
+        onRemove={removeFavorite}
+      />
       <div className="border-b border-white/10 px-3 py-1.5">
         <input
           value={filter}
@@ -458,7 +605,12 @@ export default function App() {
       )}
       <ul className="flex-1 overflow-y-auto py-1">
         {shown.map((row) => (
-          <Row key={`${row.port}-${row.pid}`} row={row} onKill={kill.open} />
+          <Row
+            key={`${row.port}-${row.pid}`}
+            row={row}
+            onKill={kill.open}
+            dying={kill.pending?.pid === row.pid && kill.pending?.port === row.port}
+          />
         ))}
         {loaded && shown.length === 0 && !error && (
           <li className="px-3 py-4 text-center text-xs text-zinc-500">

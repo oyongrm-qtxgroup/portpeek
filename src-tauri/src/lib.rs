@@ -1,3 +1,4 @@
+mod config;
 mod kill;
 mod ports;
 
@@ -55,6 +56,8 @@ pub fn run() {
             ports::list_ports,
             kill::inspect_process,
             kill::kill_process,
+            config::get_config,
+            config::save_config,
             get_autostart,
             set_autostart
         ])
