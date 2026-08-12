@@ -2,12 +2,14 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { projectLabel, runnerLabel } from "./labels";
 
 type PortRow = {
   port: number;
   pid: number;
   process: string;
   exe: string | null;
+  cmd: string | null;
   ipv4: boolean;
   ipv6: boolean;
   shield: "hard" | "critical" | null;
@@ -160,6 +162,10 @@ function Favorites({ rows }: { rows: PortRow[] }) {
 
 function Row({ row }: { row: PortRow }) {
   const stack = row.ipv4 && row.ipv6 ? "v4+v6" : row.ipv6 ? "v6" : "v4";
+  const runner = runnerLabel(row.cmd);
+  const project = projectLabel(row.cmd);
+  // Degrade, never blank: cmd -> exe -> a plain statement that we cannot see in.
+  const detail = row.cmd ?? row.exe ?? "no command line — run as administrator for detail";
   return (
     <li className="group flex items-start gap-2 px-3 py-1.5 hover:bg-white/5">
       <span
@@ -177,6 +183,9 @@ function Row({ row }: { row: PortRow }) {
             :{row.port}
           </span>
           <span className="truncate text-xs text-zinc-300">{row.process}</span>
+          {runner && (
+            <span className="shrink-0 text-xs text-zinc-500">— {runner}</span>
+          )}
           <span className="shrink-0 font-mono text-[9px] text-zinc-600">
             {stack}
           </span>
@@ -187,11 +196,13 @@ function Row({ row }: { row: PortRow }) {
           )}
         </div>
         <div
-          title={row.exe ?? undefined}
-          className="truncate text-[10px] text-zinc-500"
+          title={detail}
+          className={`truncate text-[10px] ${row.cmd ? "text-zinc-500" : "text-zinc-600 italic"}`}
         >
-          pid {row.pid}
-          {row.exe ? ` · ${row.exe}` : ""}
+          {project && (
+            <span className="not-italic font-medium text-zinc-400">{project} · </span>
+          )}
+          {detail}
         </div>
       </div>
       {row.shield === "hard" ? (
@@ -229,23 +240,58 @@ function Row({ row }: { row: PortRow }) {
 export default function App() {
   const { rows, error, loaded, refresh, setError } = usePorts();
   const autostart = useAutostart(setError);
+  const [filter, setFilter] = useState("");
+
+  const q = filter.trim().toLowerCase();
+  const shown = q
+    ? rows.filter((r) =>
+        [String(r.port), r.process, r.cmd ?? "", projectLabel(r.cmd) ?? ""]
+          .join(" ")
+          .toLowerCase()
+          .includes(q),
+      )
+    : rows;
+
+  // PID 0/4 never expose a command line by design, so they must not trigger a
+  // hint implying the user is missing something fixable.
+  const denied = rows.filter((r) => r.pid > 4 && !r.cmd).length;
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-zinc-900 text-zinc-200">
       <Header count={rows.length} onRefresh={refresh} autostart={autostart} />
       <Favorites rows={rows} />
+      <div className="border-b border-white/10 px-3 py-1.5">
+        <input
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="Filter port, process, project…"
+          spellCheck={false}
+          className="w-full rounded bg-white/5 px-2 py-1 text-[11px] text-zinc-200 placeholder:text-zinc-600 focus:bg-white/10 focus:outline-none"
+        />
+      </div>
+      {denied > 0 && (
+        <div
+          title="Windows returns an empty command line for processes owned by another user or running elevated. This is a permission limit, not an error."
+          className="border-b border-amber-500/20 bg-amber-500/5 px-3 py-1 text-[10px] text-amber-300/80"
+        >
+          {denied} process{denied === 1 ? "" : "es"} hidden detail — run as
+          administrator for full command lines
+        </div>
+      )}
       {error && (
         <div className="border-b border-red-500/30 bg-red-500/10 px-3 py-1.5 text-[10px] text-red-300">
           {error}
         </div>
       )}
       <ul className="flex-1 overflow-y-auto py-1">
-        {rows.map((row) => (
+        {shown.map((row) => (
           <Row key={`${row.port}-${row.pid}`} row={row} />
         ))}
-        {loaded && rows.length === 0 && !error && (
+        {loaded && shown.length === 0 && !error && (
           <li className="px-3 py-4 text-center text-xs text-zinc-500">
-            No TCP listeners found.
+            {rows.length === 0
+              ? "No TCP listeners found."
+              : `Nothing matches “${filter}”.`}
           </li>
         )}
       </ul>

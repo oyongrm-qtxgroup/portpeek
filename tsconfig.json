@@ -21,5 +21,8 @@
     "noFallthroughCasesInSwitch": true
   },
   "include": ["src"],
+  // Node-run assert scripts, not app code — they use node: builtins and would
+  // otherwise force a @types/node dependency just to typecheck.
+  "exclude": ["src/**/*.test.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

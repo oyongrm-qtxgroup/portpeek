@@ -34,6 +34,9 @@ pub struct PortRow {
     pub pid: u32,
     pub process: String,
     pub exe: Option<String>,
+    /// None means limited visibility, not failure: an elevated or other-user
+    /// process returns an EMPTY cmd rather than an error (PRD §4).
+    pub cmd: Option<String>,
     /// Both flags can be true: one row collapsing an IPv4 and IPv6 listener
     /// that share a PID+port (PRD §5).
     pub ipv4: bool,
@@ -98,9 +101,12 @@ pub fn scan(state: &PortState) -> Result<Vec<PortRow>, String> {
     sys.refresh_processes_specifics(
         ProcessesToUpdate::Some(&pid_list),
         true,
-        // exe is NOT populated by default (PRD §4). OnlyIfNotSet keeps it cached
-        // across polls rather than re-opening every process handle each tick.
-        ProcessRefreshKind::nothing().with_exe(UpdateKind::OnlyIfNotSet),
+        // Neither cmd nor exe is populated by default (PRD §4) — they need an
+        // explicit ProcessRefreshKind. OnlyIfNotSet keeps them cached across polls
+        // rather than re-opening every process handle each tick.
+        ProcessRefreshKind::nothing()
+            .with_exe(UpdateKind::OnlyIfNotSet)
+            .with_cmd(UpdateKind::OnlyIfNotSet),
     );
 
     // BTreeMap keyed (port, pid): dedupes v4/v6 into one row AND sorts by port asc.
@@ -125,6 +131,26 @@ pub fn scan(state: &PortState) -> Result<Vec<PortRow>, String> {
                     exe: proc
                         .and_then(|p| p.exe())
                         .map(|p| p.to_string_lossy().into_owned()),
+                    // cmd() yields args ALREADY SPLIT. Re-quote any argument
+                    // containing a space when rejoining: a bare join is ambiguous
+                    // and makes "…\Beta Analytics\server.js" read as two arguments,
+                    // which truncates the project label downstream.
+                    cmd: proc
+                        .map(|p| p.cmd())
+                        .filter(|args| !args.is_empty())
+                        .map(|args| {
+                            args.iter()
+                                .map(|a| {
+                                    let s = a.to_string_lossy();
+                                    if s.contains(' ') && !s.starts_with('"') {
+                                        format!("\"{s}\"")
+                                    } else {
+                                        s.into_owned()
+                                    }
+                                })
+                                .collect::<Vec<_>>()
+                                .join(" ")
+                        }),
                     process: name,
                     ipv4: false,
                     ipv6: false,
@@ -168,6 +194,7 @@ mod tests {
                 pid: 42,
                 process: "node.exe".into(),
                 exe: None,
+                cmd: None,
                 ipv4: false,
                 ipv6: false,
                 shield: None,
