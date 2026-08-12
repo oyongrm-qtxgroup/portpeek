@@ -25,5 +25,7 @@
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "vite": "8.2.1"
-  }
+  },
+  "license": "MIT",
+  "description": "Floating Windows widget for viewing and terminating localhost listeners"
 }

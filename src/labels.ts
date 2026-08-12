@@ -66,7 +66,7 @@ export function runnerLabel(cmd: string | null): string | null {
 export function projectLabel(cmd: string | null): string | null {
   if (!cmd) return null;
   // Quoted paths FIRST and whole: Windows quotes any path containing spaces, and
-  // a whitespace-terminated match would clip "RL Finance" to "RL". Bare paths are
+  // a whitespace-terminated match would clip "Acme Ledger" to "Acme". Bare paths are
   // only a fallback, and can only be trusted up to their first space.
   const quoted = [...cmd.matchAll(/"([A-Za-z]:[\\/][^"]*)"/g)].map((m) => m[1]);
   const bare = cmd.match(/[A-Za-z]:[\\/][^"'\s]*/g) ?? [];

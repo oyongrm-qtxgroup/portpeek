@@ -2,10 +2,12 @@
 import assert from "node:assert/strict";
 import { projectLabel, runnerLabel } from "./labels.ts";
 
+// A spaced project directory is the interesting case, not an incidental one:
+// it is what broke the first implementation.
 const REAL_VITE =
-  'node "C:\\Users\\Ray\\Documents\\Projects\\RL Finance\\node_modules\\vite\\bin\\vite.js" dev --port 8080 --strictPort';
+  'node "C:\\Users\\dev\\Projects\\Acme Ledger\\node_modules\\vite\\bin\\vite.js" dev --port 8080 --strictPort';
 
-assert.equal(projectLabel(REAL_VITE), "RL Finance", "cuts at node_modules to reach the project");
+assert.equal(projectLabel(REAL_VITE), "Acme Ledger", "cuts at node_modules to reach the project");
 assert.equal(runnerLabel(REAL_VITE), "vite");
 
 // The M3 done-when gate: two node.exe servers must be tellable apart by project.
