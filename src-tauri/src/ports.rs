@@ -47,6 +47,32 @@ pub struct PortRow {
     pub badge: Option<&'static str>,
 }
 
+/// sysinfo returns args ALREADY SPLIT. Rejoining with plain spaces is ambiguous:
+/// `...\Beta Analytics\server.js` reads back as two arguments and silently
+/// truncates the project label in the frontend. Re-quote anything with a space so
+/// the result is a faithful, re-parseable command line.
+///
+/// Returns None for an empty arg list, which on Windows means access denied
+/// rather than "no arguments" (PRD §4).
+fn join_cmd(args: &[std::ffi::OsString]) -> Option<String> {
+    if args.is_empty() {
+        return None;
+    }
+    Some(
+        args.iter()
+            .map(|a| {
+                let s = a.to_string_lossy();
+                if s.contains(' ') && !s.starts_with('"') {
+                    format!("\"{s}\"")
+                } else {
+                    s.into_owned()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
 fn classify(pid: u32, name: &str) -> (Option<&'static str>, Option<&'static str>) {
     match pid {
         // PID 4 owns http.sys-backed listeners (IIS, WinRM 5985, sometimes 80/443).
@@ -131,26 +157,7 @@ pub fn scan(state: &PortState) -> Result<Vec<PortRow>, String> {
                     exe: proc
                         .and_then(|p| p.exe())
                         .map(|p| p.to_string_lossy().into_owned()),
-                    // cmd() yields args ALREADY SPLIT. Re-quote any argument
-                    // containing a space when rejoining: a bare join is ambiguous
-                    // and makes "…\Beta Analytics\server.js" read as two arguments,
-                    // which truncates the project label downstream.
-                    cmd: proc
-                        .map(|p| p.cmd())
-                        .filter(|args| !args.is_empty())
-                        .map(|args| {
-                            args.iter()
-                                .map(|a| {
-                                    let s = a.to_string_lossy();
-                                    if s.contains(' ') && !s.starts_with('"') {
-                                        format!("\"{s}\"")
-                                    } else {
-                                        s.into_owned()
-                                    }
-                                })
-                                .collect::<Vec<_>>()
-                                .join(" ")
-                        }),
+                    cmd: proc.map(|p| p.cmd()).and_then(join_cmd),
                     process: name,
                     ipv4: false,
                     ipv6: false,
@@ -181,6 +188,29 @@ mod tests {
         assert_eq!(classify(900, "LSASS.EXE").0, Some("critical"));
         assert_eq!(classify(900, "svchost.exe").0, Some("critical"));
         assert_eq!(classify(1234, "node.exe"), (None, None));
+    }
+
+    /// Regression: this shipped broken. The frontend label test passed the whole
+    /// time because the join lives HERE, so no TS test could ever have caught it.
+    #[test]
+    fn join_cmd_requotes_spaced_arguments() {
+        use std::ffi::OsString;
+        let args: Vec<OsString> = vec![
+            r"C:\Program Files\nodejs\node.exe".into(),
+            r"C:\work\Beta Analytics\server.js".into(),
+            "9102".into(),
+        ];
+        assert_eq!(
+            join_cmd(&args).unwrap(),
+            r#""C:\Program Files\nodejs\node.exe" "C:\work\Beta Analytics\server.js" 9102"#
+        );
+
+        // Unspaced args must NOT gain quotes, or the tooltip stops being copy-pasteable.
+        let plain: Vec<OsString> = vec!["node".into(), r"C:\proj\app.js".into()];
+        assert_eq!(join_cmd(&plain).unwrap(), r"node C:\proj\app.js");
+
+        // Empty argv is access denied on Windows, not "no arguments".
+        assert_eq!(join_cmd(&[]), None);
     }
 
     /// The real invariant of the dedupe: one row per (port, pid) with both family
