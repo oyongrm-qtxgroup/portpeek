@@ -1,11 +1,15 @@
 mod ports;
 
 use tauri::{
-    menu::{Menu, MenuItem},
+    menu::{CheckMenuItem, Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager,
 };
+use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_window_state::StateFlags;
+
+/// Passed by the autostart registration so a sign-in launch can start in the tray.
+const AUTOSTART_FLAG: &str = "--autostart";
 
 /// Bring the widget back from the tray. `unminimize` matters as well as `show`:
 /// hiding and minimising are independent states, and a widget that was minimised
@@ -30,10 +34,35 @@ pub fn run() {
                 .with_state_flags(StateFlags::POSITION | StateFlags::SIZE)
                 .build(),
         )
+        // Opt-in only: the tray exposes a toggle, nothing is registered at install.
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_FLAG]),
+        ))
         .setup(|app| {
+            // The window is configured visible:false so a sign-in launch never
+            // flashes an always-on-top widget across the desktop. A normal launch
+            // shows it immediately; an autostarted one waits in the tray.
+            if !std::env::args().any(|a| a == AUTOSTART_FLAG) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                }
+            }
+
             let show_item = MenuItem::with_id(app, "show", "Show PortPeek", true, None::<&str>)?;
+            let autostart_item = CheckMenuItem::with_id(
+                app,
+                "autostart",
+                "Start with Windows",
+                true,
+                app.autolaunch().is_enabled().unwrap_or(false),
+                None::<&str>,
+            )?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit PortPeek", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &quit_item])?;
+            let menu = Menu::with_items(app, &[&show_item, &autostart_item, &quit_item])?;
+            // The event closure owns its own handle to the item so it can write the
+            // checkmark back from the real registry state, not from an assumption.
+            let autostart_check = autostart_item.clone();
 
             TrayIconBuilder::new()
                 .icon(app.default_window_icon().unwrap().clone())
@@ -42,8 +71,17 @@ pub fn run() {
                 // Left click restores; the menu is reserved for right click, otherwise
                 // the common case (get my widget back) costs two clicks.
                 .show_menu_on_left_click(false)
-                .on_menu_event(|app, event| match event.id.as_ref() {
+                .on_menu_event(move |app, event| match event.id.as_ref() {
                     "show" => show_widget(app),
+                    "autostart" => {
+                        let mgr = app.autolaunch();
+                        let _ = if mgr.is_enabled().unwrap_or(false) {
+                            mgr.disable()
+                        } else {
+                            mgr.enable()
+                        };
+                        let _ = autostart_check.set_checked(mgr.is_enabled().unwrap_or(false));
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
