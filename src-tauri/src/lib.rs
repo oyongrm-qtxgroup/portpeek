@@ -1,3 +1,4 @@
+mod kill;
 mod ports;
 
 use tauri::{
@@ -52,6 +53,8 @@ pub fn run() {
         .manage(ports::PortState::default())
         .invoke_handler(tauri::generate_handler![
             ports::list_ports,
+            kill::inspect_process,
+            kill::kill_process,
             get_autostart,
             set_autostart
         ])
