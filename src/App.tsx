@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { projectLabel, runnerLabel } from "./labels";
@@ -12,7 +13,9 @@ type PortRow = {
   cmd: string | null;
   ipv4: boolean;
   ipv6: boolean;
-  shield: "hard" | "critical" | null;
+  /// Mirrors ports.rs classify(): "hard" = PID 0/4, never killable; "critical" =
+  /// killable but bugcheck-warned; "forwarded" = Docker/WSL relay, label-only.
+  shield: "hard" | "critical" | "forwarded" | null;
   badge: string | null;
 };
 
@@ -74,6 +77,9 @@ function useAutostart(onError: (msg: string) => void) {
 
   return { on, toggle };
 }
+
+const FORWARDED_TIP =
+  "Forwarded from Docker/WSL. Stop the container or WSL service instead — killing this relay won't stop the underlying server and may break other forwards.";
 
 type ChainInfo = { parentName: string | null; childCount: number; suggestTree: boolean };
 type KillReport = { denied: boolean; alreadyGone: boolean; detail: string };
@@ -163,10 +169,12 @@ function Header({
   count,
   onRefresh,
   autostart,
+  onCollapse,
 }: {
   count: number;
   onRefresh: () => void;
   autostart: ReturnType<typeof useAutostart>;
+  onCollapse: () => void;
 }) {
   // data-tauri-drag-region applies only to the element it sits on, so the
   // non-interactive children carry it too — otherwise dragging by the title fails.
@@ -204,6 +212,13 @@ function Header({
         }`}
       >
         ⏻
+      </button>
+      <button
+        title="Collapse to pill"
+        onClick={onCollapse}
+        className="rounded px-1.5 py-0.5 text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
+      >
+        ⌃
       </button>
       <button
         // hide(), not minimize(): minimising a frameless always-on-top widget leaves
@@ -262,7 +277,96 @@ function useConfig() {
     [config, write],
   );
 
-  return { config, addFavorite, removeFavorite };
+  const setCollapsed = useCallback(
+    (collapsed: boolean) => {
+      if (!config) return;
+      write({ ...config, collapsed });
+    },
+    [config, write],
+  );
+
+  return { config, addFavorite, removeFavorite, setCollapsed };
+}
+
+const PILL_HEIGHT = 44;
+const DEFAULT_EXPANDED = { width: 320, height: 480 };
+
+/// Collapsed mode shrinks the window itself — a full-size window showing one strip
+/// would still cover the desktop, which is the thing collapsing is meant to stop.
+function useCollapse(collapsed: boolean) {
+  const expanded = useRef<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    const win = getCurrentWindow();
+    (async () => {
+      const factor = await win.scaleFactor();
+      const current = (await win.innerSize()).toLogical(factor);
+      if (collapsed) {
+        // Guard against remembering a pill as if it were the expanded size: the
+        // window-state plugin restores whatever size we quit at, so starting up
+        // already-collapsed would otherwise make "expand" a no-op forever.
+        if (current.height > PILL_HEIGHT * 2) {
+          expanded.current = { width: current.width, height: current.height };
+        }
+        await win.setSize(
+          new LogicalSize(Math.max(current.width, 220), PILL_HEIGHT),
+        );
+      } else {
+        const target = expanded.current ?? DEFAULT_EXPANDED;
+        if (current.height <= PILL_HEIGHT * 2) {
+          await win.setSize(new LogicalSize(target.width, target.height));
+        }
+      }
+    })().catch(() => {});
+  }, [collapsed]);
+}
+
+function Pill({
+  favorites,
+  rows,
+  onExpand,
+}: {
+  favorites: number[];
+  rows: PortRow[];
+  onExpand: () => void;
+}) {
+  return (
+    <div
+      data-tauri-drag-region
+      className="flex h-full select-none items-center gap-2 bg-zinc-900 px-3 text-zinc-200"
+    >
+      <span data-tauri-drag-region className="text-[11px] font-semibold">
+        PortPeek
+      </span>
+      <span data-tauri-drag-region className="flex flex-1 items-center gap-2">
+        {favorites.length === 0 && (
+          <span className="text-[10px] text-zinc-600">no pinned ports</span>
+        )}
+        {favorites.map((port) => {
+          const occupied = rows.some((r) => r.port === port);
+          return (
+            <span
+              key={port}
+              title={`${port} — ${occupied ? "occupied" : "free"}`}
+              className="flex items-center gap-1 font-mono text-[10px] text-zinc-400"
+            >
+              <span
+                className={`size-1.5 rounded-full ${occupied ? "bg-amber-400" : "bg-emerald-400"}`}
+              />
+              {port}
+            </span>
+          );
+        })}
+      </span>
+      <button
+        onClick={onExpand}
+        title="Expand"
+        className="rounded px-1.5 text-zinc-400 hover:bg-white/10 hover:text-zinc-100"
+      >
+        ⌄
+      </button>
+    </div>
+  );
 }
 
 function Favorites({
@@ -428,6 +532,13 @@ function Row({
         <span className="mt-0.5 shrink-0 animate-pulse text-[10px] text-zinc-400">
           terminating…
         </span>
+      ) : row.shield === "forwarded" ? (
+        <span
+          title={FORWARDED_TIP}
+          className="mt-0.5 shrink-0 cursor-help text-xs text-sky-400/70"
+        >
+          ⓘ
+        </span>
       ) : row.shield === "hard" ? (
         <span
           title={
@@ -552,8 +663,10 @@ export default function App() {
   const { rows, error, loaded, refresh, setError } = usePorts();
   const autostart = useAutostart(setError);
   const kill = useKill(rows);
-  const { config, addFavorite, removeFavorite } = useConfig();
+  const { config, addFavorite, removeFavorite, setCollapsed } = useConfig();
   const [filter, setFilter] = useState("");
+  const collapsed = config?.collapsed ?? false;
+  useCollapse(collapsed);
 
   const q = filter.trim().toLowerCase();
   const shown = q
@@ -569,9 +682,24 @@ export default function App() {
   // hint implying the user is missing something fixable.
   const denied = rows.filter((r) => r.pid > 4 && !r.cmd).length;
 
+  if (collapsed) {
+    return (
+      <Pill
+        favorites={config?.favorites ?? []}
+        rows={rows}
+        onExpand={() => setCollapsed(false)}
+      />
+    );
+  }
+
   return (
     <div className="relative flex h-full flex-col overflow-hidden bg-zinc-900 text-zinc-200">
-      <Header count={rows.length} onRefresh={refresh} autostart={autostart} />
+      <Header
+        count={rows.length}
+        onRefresh={refresh}
+        autostart={autostart}
+        onCollapse={() => setCollapsed(true)}
+      />
       <Favorites
         favorites={config?.favorites ?? []}
         rows={rows}

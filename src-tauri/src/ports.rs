@@ -73,13 +73,34 @@ fn join_cmd(args: &[std::ffi::OsString]) -> Option<String> {
     )
 }
 
+/// Host-side relays for container/VM published ports (PRD §7). Killing one does not
+/// stop the underlying server and may break other forwards, so these are label-only.
+///
+/// Deliberately NOT here: `vmmem`/`vmmemWSL`, which is the VM's memory-accounting
+/// process and never owns the socket; and `vpnkit-bridge`/`docker-proxy`, which are
+/// legacy and no longer the host-side listener in current Docker Desktop.
+const FORWARDERS: &[(&str, &str)] = &[
+    ("com.docker.backend.exe", "Docker"),
+    ("wslrelay.exe", "WSL"),   // NAT mode, current
+    ("wslservice.exe", "WSL"), // mirrored mode
+    ("wslhost.exe", "WSL"),    // legacy
+];
+
 fn classify(pid: u32, name: &str) -> (Option<&'static str>, Option<&'static str>) {
+    let lower = name.to_ascii_lowercase();
     match pid {
         // PID 4 owns http.sys-backed listeners (IIS, WinRM 5985, sometimes 80/443).
         4 => (Some("hard"), Some("HTTP.sys / Windows")),
         0 => (Some("hard"), None),
-        _ if CRITICAL.contains(&name.to_ascii_lowercase().as_str()) => (Some("critical"), None),
-        _ => (None, None),
+        _ => {
+            if let Some((_, badge)) = FORWARDERS.iter().find(|(exe, _)| *exe == lower) {
+                return (Some("forwarded"), Some(badge));
+            }
+            if CRITICAL.contains(&lower.as_str()) {
+                return (Some("critical"), None);
+            }
+            (None, None)
+        }
     }
 }
 
@@ -188,6 +209,29 @@ mod tests {
         assert_eq!(classify(900, "LSASS.EXE").0, Some("critical"));
         assert_eq!(classify(900, "svchost.exe").0, Some("critical"));
         assert_eq!(classify(1234, "node.exe"), (None, None));
+    }
+
+    #[test]
+    fn forwarded_relays_are_labelled_not_killable() {
+        assert_eq!(
+            classify(900, "com.docker.backend.exe"),
+            (Some("forwarded"), Some("Docker"))
+        );
+        for relay in ["wslrelay.exe", "wslservice.exe", "wslhost.exe"] {
+            assert_eq!(classify(900, relay), (Some("forwarded"), Some("WSL")));
+        }
+        assert_eq!(classify(900, "WSLRelay.exe").0, Some("forwarded"));
+
+        // PRD §7 calls these out explicitly as things NOT to match: vmmem never owns
+        // the socket, and the legacy Docker helpers are no longer the host listener.
+        assert_eq!(classify(900, "vmmem"), (None, None));
+        assert_eq!(classify(900, "vmmemWSL"), (None, None));
+        assert_eq!(classify(900, "docker-proxy.exe"), (None, None));
+        assert_eq!(classify(900, "vpnkit-bridge.exe"), (None, None));
+
+        // A forwarded relay must never be downgraded to a plain killable row, and
+        // PID 4 still wins over everything.
+        assert_eq!(classify(4, "wslrelay.exe").0, Some("hard"));
     }
 
     /// Regression: this shipped broken. The frontend label test passed the whole
