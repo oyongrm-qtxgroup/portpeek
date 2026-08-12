@@ -22,8 +22,8 @@
         "maxHeight": 900,
         "resizable": true,
         "decorations": false,
-        "transparent": true,
-        "shadow": false,
+        "transparent": false,
+        "shadow": true,
         "alwaysOnTop": true,
         "center": true
       }

@@ -1,7 +1,9 @@
+mod ports;
+
 use tauri::{
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    Manager,
+    Emitter, Manager,
 };
 use tauri_plugin_window_state::StateFlags;
 
@@ -19,6 +21,8 @@ fn show_widget(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(ports::PortState::default())
+        .invoke_handler(tauri::generate_handler![ports::list_ports])
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 // Position + size only. Restoring VISIBLE would let a run that ended
@@ -54,6 +58,34 @@ pub fn run() {
                     }
                 })
                 .build(app)?;
+
+            // Poll from Rust so the 2s cadence is immune to WebView2 throttling the
+            // webview's timers when the widget is occluded. Skips entirely while
+            // hidden in the tray (PRD §10 M2).
+            let handle = app.handle().clone();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let win = handle.get_webview_window("main");
+                let visible = win
+                    .as_ref()
+                    .and_then(|w| w.is_visible().ok())
+                    .unwrap_or(false);
+                if !visible {
+                    #[cfg(debug_assertions)]
+                    eprintln!("[portpeek] tick skipped (hidden in tray)");
+                    continue;
+                }
+                if let Some(state) = handle.try_state::<ports::PortState>() {
+                    match ports::scan(&state) {
+                        Ok(rows) => {
+                            let _ = handle.emit("ports", rows);
+                        }
+                        Err(e) => {
+                            let _ = handle.emit("ports-error", e);
+                        }
+                    }
+                }
+            });
 
             Ok(())
         })

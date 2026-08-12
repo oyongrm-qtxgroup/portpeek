@@ -1,12 +1,13 @@
 @import "tailwindcss";
 
-/* The window is frameless + transparent; the visible widget is the rounded card
-   inside App. Keep every ancestor transparent or the card's corners look clipped. */
+/* Opaque frameless window (transparency dropped — the tray gives us a way to get
+   it off screen, so it bought nothing). Matches bg-zinc-900 so any repaint gap
+   during resize flashes the widget's own colour rather than white. */
 html,
 body,
 #root {
   height: 100%;
-  background: transparent;
+  background: #18181b;
 }
 
 body {
