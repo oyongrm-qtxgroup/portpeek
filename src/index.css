@@ -1,0 +1,16 @@
+@import "tailwindcss";
+
+/* The window is frameless + transparent; the visible widget is the rounded card
+   inside App. Keep every ancestor transparent or the card's corners look clipped. */
+html,
+body,
+#root {
+  height: 100%;
+  background: transparent;
+}
+
+body {
+  overflow: hidden;
+  /* Widget, not a document: no caret, no rubber-band, no browser text drag. */
+  cursor: default;
+}
