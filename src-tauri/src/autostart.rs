@@ -1,4 +1,3 @@
-use tauri::Manager;
 use tauri_plugin_autostart::ManagerExt;
 use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_SET_VALUE};
 use winreg::RegKey;
