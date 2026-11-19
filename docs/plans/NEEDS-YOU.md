@@ -35,3 +35,14 @@
   `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\portpeek` =
   `...\portpeek.exe --autostart`, and removing it again. Tray menu event delivery
   separately verified (tray → Quit exits the app).
+
+- [ ] 2026-11-19 **Reinstall the MSVC C++ build tools + Windows SDK, then ping me to
+  finish the autostart fix.** `link.exe` and `Windows Kits\10\Lib` are gone from this
+  machine (both were present in the first session; the `BuildTools` folder and
+  `vswhere.exe` are now empty/missing), so Rust cannot link and I could not compile,
+  run `cargo test`, or rebuild the installer. The source fix for the unquoted autostart
+  path is written, applied and committed, but is **unverified**: the algorithm was
+  checked by a line-for-line transcription, not by compiling the Rust.
+  Reinstall with:
+  `winget install --id Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"`
+  Then I run `cargo test --lib`, rebuild, and verify the registry value end to end.

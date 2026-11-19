@@ -2529,6 +2529,7 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-autostart",
  "tauri-plugin-window-state",
+ "winreg 0.55.0",
 ]
 
 [[package]]

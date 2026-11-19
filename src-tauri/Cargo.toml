@@ -28,3 +28,7 @@ netstat2 = "=0.11.2"
 # Process enrichment. default-features would pull in `component`, which links
 # windows/Win32_System_Wmi -- PRD §4 forbids WMI, so we take `system` only.
 sysinfo = { version = "=0.39.6", default-features = false, features = ["system"] }
+
+# Repairing the Run value that tauri-plugin-autostart writes unquoted (autostart.rs).
+# Already vendored as a build-dep of embed-resource, so this downloads nothing.
+winreg = "=0.55.0"

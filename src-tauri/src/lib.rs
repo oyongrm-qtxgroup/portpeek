@@ -1,3 +1,4 @@
+mod autostart;
 mod config;
 mod kill;
 mod ports;
@@ -10,32 +11,7 @@ use tauri::{
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_window_state::StateFlags;
 
-/// Passed by the autostart registration so a sign-in launch can start in the tray.
-const AUTOSTART_FLAG: &str = "--autostart";
-
-#[tauri::command]
-fn get_autostart(app: tauri::AppHandle) -> Result<bool, String> {
-    app.autolaunch().is_enabled().map_err(|e| e.to_string())
-}
-
-/// Returns the state read back from the OS, never the state we asked for, so a
-/// write that silently fails cannot present itself as success.
-#[tauri::command]
-fn set_autostart(app: tauri::AppHandle, enabled: bool) -> Result<bool, String> {
-    let mgr = app.autolaunch();
-    if enabled {
-        mgr.enable().map_err(|e| format!("enable failed: {e}"))?;
-    } else {
-        mgr.disable().map_err(|e| format!("disable failed: {e}"))?;
-    }
-    let actual = mgr.is_enabled().map_err(|e| e.to_string())?;
-    if actual != enabled {
-        return Err(format!(
-            "autostart still reads {actual} after asking for {enabled}"
-        ));
-    }
-    Ok(actual)
-}
+use autostart::AUTOSTART_FLAG;
 
 /// Bring the widget back from the tray. `unminimize` matters as well as `show`:
 /// hiding and minimising are independent states, and a widget that was minimised
@@ -58,8 +34,8 @@ pub fn run() {
             kill::kill_process,
             config::get_config,
             config::save_config,
-            get_autostart,
-            set_autostart
+            autostart::get_autostart,
+            autostart::set_autostart
         ])
         .plugin(
             tauri_plugin_window_state::Builder::default()
@@ -81,6 +57,13 @@ pub fn run() {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.show();
                 }
+            }
+
+            // Migration: copies installed before the quoting fix carry an unquoted
+            // path. repair_entry is idempotent, so running it every launch is safe.
+            if let Ok(true) = autostart::repair_entry(app.handle()) {
+                #[cfg(debug_assertions)]
+                eprintln!("[portpeek] repaired unquoted autostart entry");
             }
 
             let show_item = MenuItem::with_id(app, "show", "Show PortPeek", true, None::<&str>)?;
@@ -112,7 +95,7 @@ pub fn run() {
                         // Drive the checkmark from what the OS reports back, not from
                         // what we asked for -- CheckMenuItem ticks itself on click, so
                         // a failed write would otherwise look like it succeeded.
-                        let actual = match set_autostart(app.clone(), want) {
+                        let actual = match autostart::set_autostart(app.clone(), want) {
                             Ok(v) => v,
                             Err(e) => {
                                 let _ = app.emit("autostart-error", e);
